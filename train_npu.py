@@ -5,17 +5,19 @@ train_npu.py
 [Genius Edition] NPU 910B Full Parallel Training Engine
 """
 import os
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 import argparse
 from pathlib import Path
 
-# 第一时间物理劫持环境！必须在所有操作前！
+# 【天才之眼】：第一时间物理劫持环境！必须在所有操作前（特别是 import torch 之前）执行！
+# 任何提前导入的 torch 都会被系统默认初始化，导致后续的 CANN 环境变量注入直接触发 driver error=87
 from core.env_npu import hijack_npu_env, verify_npu_setup
 hijack_npu_env()
+
+import torch
 import torch_npu
+import torch.nn as nn
+from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 
 from core.architecture import PianoMuseRWKV
 from core.dataset import CopilotDataset, collate_fn, load_dataset
@@ -53,7 +55,10 @@ def train_epoch_npu(model, dataloader, optimizer, scheduler, device, epoch, grad
         total_loss += loss.item()
         
         if (batch_idx + 1) % 10 == 0:
-            vram_used = torch.npu.memory_allocated() / 1024**3
+            try:
+                vram_used = torch.npu.memory_allocated() / 1024**3
+            except Exception:
+                vram_used = 0.0
             lr = optimizer.param_groups[0]['lr']
             print(f"Epoch {epoch} [{batch_idx+1}/{num_batches}] "
                   f"Loss: {loss.item():.4f} | LR: {lr:.6f} | "
@@ -67,7 +72,9 @@ def main(args):
     print("=" * 70)
     verify_npu_setup()
     
-    device = torch.device('npu:0')
+    # 取代写死的 npu:0，顺应容器自动分配的 current_device
+    device_id = torch.npu.current_device()
+    device = torch.device(f'npu:{device_id}')
     torch.npu.set_device(device)
     
     data_pairs = load_dataset(args.data_path)
@@ -77,9 +84,9 @@ def main(args):
     tokenizer = PianoTokenizer(vocab_size=args.vocab_size)
     dataset = CopilotDataset(data_pairs, max_seq_len=args.max_seq_len, tokenizer=tokenizer)
     
-    # 你有 16v CPU，直接把 IO 通道全部打开喂饱 NPU
+    # NPU环境有时进程 fork 较慢，将 num_workers 调到 4 足够喂饱，防止爆内存
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, 
-                            num_workers=8, pin_memory=True, collate_fn=collate_fn)
+                            num_workers=4, pin_memory=True, collate_fn=collate_fn)
     
     # 策略设为 cpu 先加载权重，然后物理转移至 NPU，规避显存尖峰
     model = PianoMuseRWKV(args.pretrained_model, strategy='cpu bf16')
