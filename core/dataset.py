@@ -1,3 +1,5 @@
+# --edited --complete
+# FILE PATH: core/dataset.py
 """
 PyTorch Dataset for Piano Music Completion.
 Efficient data loading with Hugging Face datasets integration.
@@ -190,6 +192,10 @@ def load_dataset(input_path: str) -> List[Dict[str, List[int]]]:
     data_pairs = []
     with open(input_path, 'r', encoding='utf-8') as f:
         for line in f:
+            # 物理级拦截空行与异常空白符，杜绝 JSONDecodeError
+            line = line.strip()
+            if not line:
+                continue
             data_pairs.append(json.loads(line))
     print(f"[Dataset] Loaded {len(data_pairs)} pairs from {input_path}")
     return data_pairs
