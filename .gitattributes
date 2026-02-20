@@ -1,2 +1,4 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+data/processed/processed_dataset.jsonl filter=lfs diff=lfs merge=lfs -text
+models/rwkv_430m.pth filter=lfs diff=lfs merge=lfs -text

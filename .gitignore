@@ -21,23 +21,23 @@ ENV/
 *.swo
 
 # Data files
-data/raw_midi/
-data/processed/
-*.mid
-*.midi
-*.jsonl
+#data/raw_midi/
+#data/processed/
+#.mid
+#.midi
+#.jsonl
 
 # Model files
-models/
-*.pth
-*.pt
-*.bin
-*.safetensors
+#models/
+#*.pth
+#*.pt
+#*.bin
+#*.safetensors
 
 # Outputs
-outputs/
-*.wav
-*.mp3
+#outputs/
+#*.wav
+#*.mp3
 
 # Logs
 logs/
