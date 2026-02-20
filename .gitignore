@@ -1,0 +1,67 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data files
+data/raw_midi/
+data/processed/
+*.mid
+*.midi
+*.jsonl
+
+# Model files
+models/
+*.pth
+*.pt
+*.bin
+*.safetensors
+
+# Outputs
+outputs/
+*.wav
+*.mp3
+
+# Logs
+logs/
+*.log
+wandb/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# CUDA compilation cache
+.cache/
+
+# Keep important test files (don't ignore them)
+!test_critical_fixes.py
+!test_fixes.py
+!test_e2e.py
+!run_tests.py
