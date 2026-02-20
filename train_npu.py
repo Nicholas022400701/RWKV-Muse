@@ -1,3 +1,5 @@
+# --edited --complete
+# FILE PATH: train_npu.py
 """
 train_npu.py
 [Genius Edition] NPU 910B Full Parallel Training Engine
@@ -25,6 +27,10 @@ def train_epoch_npu(model, dataloader, optimizer, scheduler, device, epoch, grad
     total_loss = 0.0
     num_batches = len(dataloader)
     
+    if num_batches == 0:
+        print(f"[WARNING] Dataloader is empty for epoch {epoch}! Skipping training.")
+        return 0.0
+        
     for batch_idx, batch in enumerate(dataloader):
         # 物理显存直接路由至 NPU
         input_ids = batch['input_ids'].to(device, non_blocking=True)
@@ -65,6 +71,9 @@ def main(args):
     torch.npu.set_device(device)
     
     data_pairs = load_dataset(args.data_path)
+    if not data_pairs:
+        raise ValueError(f"[ERROR] Loaded dataset from {args.data_path} is totally empty! Check your preprocess output.")
+        
     tokenizer = PianoTokenizer(vocab_size=args.vocab_size)
     dataset = CopilotDataset(data_pairs, max_seq_len=args.max_seq_len, tokenizer=tokenizer)
     
@@ -94,7 +103,7 @@ def main(args):
     for epoch in range(args.epochs):
         avg_loss = train_epoch_npu(model, dataloader, optimizer, scheduler, device, epoch, args.grad_clip)
         
-        if avg_loss < best_loss:
+        if avg_loss > 0 and avg_loss < best_loss:
             best_loss = avg_loss
             torch.save(model.state_dict(), output_dir / "best_model_npu.pth")
             print(f"New Matrix State Saved! Loss: {best_loss:.4f}")
