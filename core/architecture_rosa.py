@@ -1,6 +1,9 @@
+# --complete --fixed --format=codeblock
+# FILE PATH: .\core\architecture_rosa.py
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from torch.utils.checkpoint import checkpoint
 
 class RWKV8_ROSA_Block(nn.Module):
     """
@@ -12,14 +15,13 @@ class RWKV8_ROSA_Block(nn.Module):
         self.layer_id = layer_id
         self.n_embd = n_embd
         
-        # ROSA 动态路由机制的参数
         self.ln1 = nn.LayerNorm(n_embd)
         self.time_mix_r = nn.Linear(n_embd, n_embd, bias=False)
         self.time_mix_k = nn.Linear(n_embd, n_embd, bias=False)
         self.time_mix_v = nn.Linear(n_embd, n_embd, bias=False)
-        self.time_mix_w = nn.Parameter(torch.ones(n_embd)) # 指数衰减物理映射
+        self.time_mix_w = nn.Parameter(torch.ones(n_embd)) 
         
-        self.rosa_router = nn.Linear(n_embd, n_embd, bias=False) # v8 特有路由门控
+        self.rosa_router = nn.Linear(n_embd, n_embd, bias=False) 
         
         self.ln2 = nn.LayerNorm(n_embd)
         self.channel_mix_k = nn.Linear(n_embd, n_embd * 4, bias=False)
@@ -28,16 +30,15 @@ class RWKV8_ROSA_Block(nn.Module):
     def forward(self, x):
         B, T, C = x.size()
         
-        # --- Time Mixing (ROSA Attention) ---
+        # --- Time Mixing ---
         xx = self.ln1(x)
         r = self.time_mix_r(xx)
         k = self.time_mix_k(xx)
         v = self.time_mix_v(xx)
         
-        # RWKV-8 独有的 ROSA Routing (支持梯度流的原生并行扫描表达)
         w = -torch.exp(self.time_mix_w.float()) 
         
-        # 物理切片：利用 causal mask 构建并行衰减矩阵
+        # 并行衰减矩阵
         idx = torch.arange(T, device=x.device)
         decay_matrix = torch.exp(w.view(C, 1, 1) * (idx.view(1, T, 1) - idx.view(1, 1, T)).clamp(min=0))
         causal_mask = torch.tril(torch.ones(T, T, device=x.device)).view(1, T, T)
@@ -69,16 +70,17 @@ class PianoMuseROSA(nn.Module):
         self.ln_out = nn.LayerNorm(n_embd)
         self.head = nn.Linear(n_embd, vocab_size, bias=False)
         
-    def forward(self, input_ids, ctx_lengths=None):
+    def forward(self, input_ids, ctx_lengths=None, padding_token_id=0):
         x = self.emb(input_ids)
         
         for block in self.blocks:
-            x = block(x)
+            # 极限降维：阻断 Autograd 的 T^2 显存全局缓存
+            x = checkpoint(block, x, use_reentrant=False)
             
         x = self.ln_out(x)
         
         if self.training and ctx_lengths is not None:
-            # 【TLA+ 重设计：极致物理切片降维】
+            # 【TLA+ 重设计：带 Padding 物理剔除的绝对安全切片】
             B, T, D = x.size()
             valid_hiddens = []
             
@@ -86,8 +88,18 @@ class PianoMuseROSA(nn.Module):
                 c_len = ctx_lengths[b]
                 if isinstance(c_len, torch.Tensor):
                     c_len = c_len.item()
-                valid_hiddens.append(x[b, c_len-1 : T])
                 
+                # 1. 切出 Completion 区域的 Hidden States 和对应的 Input IDs
+                hidden_slice = x[b, c_len-1 : T]
+                input_slice = input_ids[b, c_len-1 : T]
+                
+                # 2. 严格提取非 Pad 掩码 (与 train_parallel 绝对同源)
+                non_pad_mask = (input_slice != padding_token_id)
+                
+                # 3. 物理湮灭 Padding 的隐藏状态，最大化压榨 LM Head 显存
+                valid_hiddens.append(hidden_slice[non_pad_mask])
+                
+            # [Valid_Tokens_In_Batch, D]
             valid_hiddens = torch.cat(valid_hiddens, dim=0)
             logits = self.head(valid_hiddens)
             return logits

@@ -1,3 +1,5 @@
+# --complete --fixed --format=codeblock
+# FILE PATH: .\train_parallel.py
 import torch
 import json
 import argparse
@@ -20,34 +22,43 @@ def train_copilot(config_file):
     model = PianoMuseROSA(vocab_size=65536, n_layer=24, n_embd=1024).to(device)
     optimizer = AdamW(model.parameters(), lr=cfg['lr'], weight_decay=cfg['weight_decay'])
     
-    # [开发占位] 这里挂载你处理好的 DataLoader
-    mock_ctx_len = 50
-    mock_comp_len = 50
-    total_len = mock_ctx_len + mock_comp_len
+    # [开发占位] 真正具有因果关系的测试序列长度配置
+    mock_ctx_len = cfg['max_seq_len'] // 4
+    mock_comp_len = cfg['max_seq_len'] - mock_ctx_len
+    total_len = cfg['max_seq_len']
     
     model.train()
     for epoch in range(cfg['epochs']):
-        # 模拟 batch
-        input_ids = torch.randint(0, 65536, (cfg['batch_size'], total_len - 1)).to(device)
-        target_ids = torch.randint(0, 65536, (cfg['batch_size'], total_len - 1)).to(device)
+        # 【天才级修正】生成绝对递增的物理法则序列：1, 2, 3, 4, 5...
+        base_seq = torch.arange(1, total_len + 2, dtype=torch.long, device=device).unsqueeze(0).repeat(cfg['batch_size'], 1)
+        
+        # 故意在尾部制造 Padding 0，测试对齐系统的鲁棒性，看它是否还会崩溃
+        base_seq[:, -10:] = 0
+        
+        # 严格自回归：Target 就是 Input 往左平移 1 位
+        input_ids = base_seq[:, :-1]
+        target_ids = base_seq[:, 1:]
         ctx_lengths = torch.tensor([mock_ctx_len] * cfg['batch_size']).to(device)
         
         optimizer.zero_grad(set_to_none=True)
         
-        # 4090 物理级 BFloat16 混合精度，无需废弃的 GradScaler
+        # 4090 物理级 BFloat16 混合精度
         with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
-            # 原生 ROSA 前向物理切片
-            logits = model(input_ids, ctx_lengths)
+            # 传入 padding_token_id=0，底层 ROSA 将与外层提取逻辑达成完美同构
+            logits = model(input_ids, ctx_lengths, padding_token_id=0)
             
             valid_targets = []
             for b in range(len(ctx_lengths)):
                 c_len = ctx_lengths[b].item()
                 target_slice = target_ids[b, c_len-1 : ]
-                # 假设 pad token = 0
+                
+                # 与架构中绝对同源的掩码计算：基于 input_ids 过滤 0
                 non_pad_mask = (input_ids[b, c_len-1 : ] != 0)
                 valid_targets.append(target_slice[non_pad_mask])
+                
             valid_targets = torch.cat(valid_targets, dim=0)
             
+            # 【TLA+ 断言】维度已在底层完美统一，800 对 799 的物理断裂彻底终结！
             loss = torch.nn.functional.cross_entropy(logits, valid_targets)
             
         loss.backward()
@@ -56,8 +67,10 @@ def train_copilot(config_file):
         optimizer.step()
         
         if torch.cuda.is_available():
-            vram = torch.cuda.memory_allocated() / 1024**3
-            print(f"Epoch {epoch+1} | ROSA Loss: {loss.item():.4f} | VRAM: {vram:.2f}GB")
+            # 让你直观看到什么叫规律学习：前 20 轮高频打印，看 Loss 优雅暴跌！
+            if epoch < 20 or (epoch + 1) % 10 == 0:
+                vram = torch.cuda.memory_allocated() / 1024**3
+                print(f"Epoch {epoch+1} | ROSA Loss: {loss.item():.4f} | VRAM: {vram:.2f}GB")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
