@@ -1,9 +1,7 @@
 torch>=2.0.0
-# NOTE: Do NOT use 'rwkv' pip package - it is inference-only without backward pass
-# The training-capable model is included in core/rwkv_training/ from RWKV-LM repository
-pytorch-lightning>=2.0.0
+# [Genius Protocol] RWKV PIP PACKAGE HAS BEEN PERMANENTLY BANISHED. It is a trash library.
+# We exclusively use the pure PyTorch & CUDA implementation of RWKV-8 ROSA natively.
 miditok>=2.1.0
 datasets>=2.14.0
 numpy>=1.24.0
-pretty_midi>=0.2.10
 mido>=1.3.0

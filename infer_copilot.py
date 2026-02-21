@@ -1,81 +1,41 @@
-"""
-O(1) Memory Inference Engine for Piano Completion.
-[Genius Edition] Pure PyTorch native inference with parallel prefill.
-"""
-
-import os
 import torch
-import argparse
-from pathlib import Path
+from core.architecture_rosa import PianoMuseROSA
 
-# Must hijack environment BEFORE importing PyTorch/RWKV
-from core.env_hijack import hijack_windows_cuda_env, verify_cuda_setup
-hijack_windows_cuda_env()
-
-from core.tokenization import PianoTokenizer
-from core.architecture import PianoMuseRWKV
-
-def main(args):
-    print("=" * 70)
-    print("RWKV Piano Music Completion - TLA+ Inference Engine")
-    print("=" * 70)
+@torch.no_grad()
+def generate_inspiration(model, context_tokens, generate_len=256, temp=0.85, top_p=0.90):
+    # 1. 极致高效的前向预填充 (Prefilling)
+    ctx_tensor = torch.tensor([context_tokens]).cuda()
+    logits = model(ctx_tensor) 
     
-    verify_cuda_setup()
+    inspirations = []
+    curr_token = logits[0, -1].argmax().item()
     
-    print("\n[Tokenizer] Initializing REMI Tokenizer...")
-    tokenizer = PianoTokenizer()
-    
-    print(f"\n[Model] Loading {args.model_path} ...")
-    
-    # 【天才的闭环】：使用自行封装的 PianoMuseRWKV，而不是无知的第三方 inference 包
-    model = PianoMuseRWKV(args.model_path, strategy='cuda bf16')
-    model.eval()
-    if torch.cuda.is_available():
-        model = model.cuda()
-    print("[Model] Native architecture loaded successfully with Parallel Prefill ready.")
-    
-    print(f"\n[Context] Processing: {args.context_midi}")
-    context_tokens = tokenizer.tokenize_midi(args.context_midi)
-    if not context_tokens:
-        print("[ERROR] Context MIDI file produced no tokens!")
-        return
+    # 2. 流式生成
+    for _ in range(generate_len):
+        inspirations.append(curr_token)
         
-    if args.max_context_len and len(context_tokens) > args.max_context_len:
-        print(f"[WARNING] Truncating to {args.max_context_len} tokens")
-        context_tokens = context_tokens[-args.max_context_len:]
+        curr_tensor = torch.tensor([[curr_token]]).cuda()
+        out = model(curr_tensor)[0, -1]
         
-    print(f"\n[Generation] Starting pure O(1) inference with parallel O(T) prefill...")
-    generated_tokens = model.generate(
-        context_tokens,
-        max_new_tokens=args.max_new_tokens,
-        temperature=args.temperature,
-        top_p=args.top_p,
-        top_k=args.top_k
-    )
-    
-    full_sequence = context_tokens + generated_tokens
-    
-    output_path = Path(args.output_dir) / f"completion_{Path(args.context_midi).stem}.mid"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    try:
-        tokenizer.detokenize(full_sequence, str(output_path))
-        print(f"\n[Success] Saved to: {output_path}")
-    except Exception as e:
-        print(f"\n[ERROR] Failed to save MIDI: {e}")
-        tokens_path = output_path.with_suffix('.txt')
-        with open(tokens_path, 'w') as f:
-            f.write(' '.join(map(str, full_sequence)))
+        probs = torch.softmax(out / temp, dim=-1)
+        sorted_probs, sorted_idx = torch.sort(probs, descending=True)
+        cum_probs = torch.cumsum(sorted_probs, dim=-1)
+        
+        remove_mask = cum_probs > top_p
+        remove_mask[1:] = remove_mask[:-1].clone()
+        remove_mask[0] = 0
+        
+        probs[sorted_idx[remove_mask]] = 0.0
+        probs = probs / probs.sum()
+        curr_token = torch.multinomial(probs, 1).item()
+            
+    return inspirations
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="RWKV Piano Completion Inference")
-    parser.add_argument("--model_path", type=str, required=True)
-    parser.add_argument("--context_midi", type=str, required=True)
-    parser.add_argument("--max_context_len", type=int, default=2048)
-    parser.add_argument("--max_new_tokens", type=int, default=512)
-    parser.add_argument("--temperature", type=float, default=0.85)
-    parser.add_argument("--top_p", type=float, default=0.90)
-    parser.add_argument("--top_k", type=int, default=0)
-    parser.add_argument("--output_dir", type=str, default="./outputs")
-    args = parser.parse_args()
-    main(args)
+    print(f"[Generation] 启动纯血 RWKV-8 ROSA 原生推演器...")
+    model = PianoMuseROSA(vocab_size=65536, n_layer=24, n_embd=1024).cuda().bfloat16()
+    model.eval()
+    
+    mock_context = [12, 45, 88, 102, 33]
+    result = generate_inspiration(model, mock_context)
+    print(f"生成的灵感序列: {result[:20]}...")
